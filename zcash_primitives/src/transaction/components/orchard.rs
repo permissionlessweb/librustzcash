@@ -90,6 +90,12 @@ pub fn read_v5_bundle<R: Read>(
     }
 }
 
+pub fn read_vcrosslink_bundle<R: Read>(
+    reader: R,
+) -> io::Result<Option<orchard::Bundle<Authorized, ZatBalance>>> {
+    read_v5_bundle(reader)
+}
+
 #[cfg(any(zcash_unstable = "zfuture", zcash_unstable = "nu7"))]
 pub fn read_v6_bundle<R: Read>(
     reader: R,
@@ -225,6 +231,13 @@ pub fn write_v5_bundle<W: Write>(
 
 #[cfg(any(zcash_unstable = "zfuture", zcash_unstable = "nu7"))]
 pub fn write_v6_bundle<W: Write>(
+    bundle: Option<&orchard::Bundle<Authorized, ZatBalance>>,
+    writer: W,
+) -> io::Result<()> {
+    write_v5_bundle(bundle, writer)
+}
+
+pub fn write_vcrosslink_bundle<W: Write>(
     bundle: Option<&orchard::Bundle<Authorized, ZatBalance>>,
     writer: W,
 ) -> io::Result<()> {

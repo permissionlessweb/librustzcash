@@ -5,6 +5,7 @@ pub mod fees;
 pub mod sighash;
 pub mod sighash_v4;
 pub mod sighash_v5;
+pub mod sighash_vcrosslink;
 #[cfg(any(zcash_unstable = "nu7", zcash_unstable = "zfuture"))]
 pub mod sighash_v6;
 
@@ -43,6 +44,8 @@ use ::sapling::builder as sapling_builder;
 use zcash_protocol::constants::{
     V3_TX_VERSION, V3_VERSION_GROUP_ID, V4_TX_VERSION, V4_VERSION_GROUP_ID, V5_TX_VERSION,
     V5_VERSION_GROUP_ID,
+    VCROSSLINK_TX_VERSION,
+    VCROSSLINK_VERSION_GROUP_ID,
 };
 
 #[cfg(zcash_unstable = "nu7")]
@@ -84,6 +87,7 @@ pub enum TxVersion {
     /// Transaction version 6, specified in [ZIP 230](https://zips.z.cash/zip-0230).
     #[cfg(zcash_unstable = "nu7")]
     V6,
+    VCrosslink,
     /// This version is used exclusively for in-development transaction
     /// serialization, and will never be active under the consensus rules.
     /// When new consensus transaction versions are added, all call sites
@@ -106,6 +110,7 @@ impl TxVersion {
                 (V5_TX_VERSION, V5_VERSION_GROUP_ID) => Ok(TxVersion::V5),
                 #[cfg(zcash_unstable = "nu7")]
                 (V6_TX_VERSION, V6_VERSION_GROUP_ID) => Ok(TxVersion::V6),
+                (VCROSSLINK_TX_VERSION, VCROSSLINK_VERSION_GROUP_ID) => Ok(TxVersion::VCrosslink),
                 #[cfg(zcash_unstable = "zfuture")]
                 (ZFUTURE_TX_VERSION, ZFUTURE_VERSION_GROUP_ID) => Ok(TxVersion::ZFuture),
                 _ => Err(io::Error::new(
@@ -138,6 +143,7 @@ impl TxVersion {
                 TxVersion::V5 => V5_TX_VERSION,
                 #[cfg(zcash_unstable = "nu7")]
                 TxVersion::V6 => V6_TX_VERSION,
+                TxVersion::VCrosslink => VCROSSLINK_TX_VERSION,
                 #[cfg(zcash_unstable = "zfuture")]
                 TxVersion::ZFuture => ZFUTURE_TX_VERSION,
             }
@@ -149,6 +155,7 @@ impl TxVersion {
             TxVersion::V3 => V3_VERSION_GROUP_ID,
             TxVersion::V4 => V4_VERSION_GROUP_ID,
             TxVersion::V5 => V5_VERSION_GROUP_ID,
+            TxVersion::VCrosslink => VCROSSLINK_VERSION_GROUP_ID,
             #[cfg(zcash_unstable = "nu7")]
             TxVersion::V6 => V6_VERSION_GROUP_ID,
             #[cfg(zcash_unstable = "zfuture")]
@@ -170,6 +177,7 @@ impl TxVersion {
             TxVersion::Sprout(v) => *v >= 2u32,
             TxVersion::V3 | TxVersion::V4 => true,
             TxVersion::V5 => false,
+            TxVersion::VCrosslink => false,
             #[cfg(zcash_unstable = "nu7")]
             TxVersion::V6 => false,
             #[cfg(zcash_unstable = "zfuture")]
@@ -187,6 +195,7 @@ impl TxVersion {
             TxVersion::Sprout(_) | TxVersion::V3 => false,
             TxVersion::V4 => true,
             TxVersion::V5 => true,
+            TxVersion::VCrosslink => true,
             #[cfg(zcash_unstable = "nu7")]
             TxVersion::V6 => true,
             #[cfg(zcash_unstable = "zfuture")]
@@ -199,6 +208,7 @@ impl TxVersion {
         match self {
             TxVersion::Sprout(_) | TxVersion::V3 | TxVersion::V4 => false,
             TxVersion::V5 => true,
+            TxVersion::VCrosslink => true,
             #[cfg(zcash_unstable = "nu7")]
             TxVersion::V6 => true,
             #[cfg(zcash_unstable = "zfuture")]
@@ -379,6 +389,7 @@ pub struct TransactionData<A: Authorization> {
     sprout_bundle: Option<sprout::Bundle>,
     sapling_bundle: Option<sapling::Bundle<A::SaplingAuth, ZatBalance>>,
     orchard_bundle: Option<orchard::bundle::Bundle<A::OrchardAuth, ZatBalance>>,
+    crosslink_data: CommandBuf,
     #[cfg(zcash_unstable = "zfuture")]
     tze_bundle: Option<tze::Bundle<A::TzeAuth>>,
 }
@@ -434,6 +445,7 @@ impl<A: Authorization> TransactionData<A> {
         sprout_bundle: Option<sprout::Bundle>,
         sapling_bundle: Option<sapling::Bundle<A::SaplingAuth, ZatBalance>>,
         orchard_bundle: Option<orchard::Bundle<A::OrchardAuth, ZatBalance>>,
+        crosslink_data: CommandBuf,
     ) -> Self {
         TransactionData {
             version,
@@ -449,6 +461,7 @@ impl<A: Authorization> TransactionData<A> {
             sprout_bundle,
             sapling_bundle,
             orchard_bundle,
+            crosslink_data,
             #[cfg(zcash_unstable = "zfuture")]
             tze_bundle: None,
         }
@@ -517,6 +530,10 @@ impl<A: Authorization> TransactionData<A> {
 
     pub fn orchard_bundle(&self) -> Option<&orchard::Bundle<A::OrchardAuth, ZatBalance>> {
         self.orchard_bundle.as_ref()
+    }
+
+    pub fn crosslink_data(&self) -> CommandBuf {
+        self.crosslink_data.clone()
     }
 
     #[cfg(all(
@@ -593,6 +610,7 @@ impl<A: Authorization> TransactionData<A> {
             digester.digest_transparent(self.transparent_bundle.as_ref()),
             digester.digest_sapling(self.sapling_bundle.as_ref()),
             digester.digest_orchard(self.orchard_bundle.as_ref()),
+            digester.digest_crosslink(&self.crosslink_data),
             #[cfg(zcash_unstable = "zfuture")]
             digester.digest_tze(self.tze_bundle.as_ref()),
         )
@@ -648,6 +666,7 @@ impl<A: Authorization> TransactionData<A> {
             sprout_bundle: self.sprout_bundle,
             sapling_bundle: f_sapling(self.sapling_bundle),
             orchard_bundle: f_orchard(self.orchard_bundle),
+            crosslink_data: self.crosslink_data,
             #[cfg(zcash_unstable = "zfuture")]
             tze_bundle: f_tze(self.tze_bundle),
         }
@@ -692,6 +711,7 @@ impl<A: Authorization> TransactionData<A> {
             sprout_bundle: self.sprout_bundle,
             sapling_bundle: f_sapling(self.sapling_bundle)?,
             orchard_bundle: f_orchard(self.orchard_bundle)?,
+            crosslink_data: self.crosslink_data,
             #[cfg(zcash_unstable = "zfuture")]
             tze_bundle: f_tze(self.tze_bundle)?,
         })
@@ -734,6 +754,7 @@ impl<A: Authorization> TransactionData<A> {
                     |f, a| f.map_authorization(a),
                 )
             }),
+            crosslink_data: self.crosslink_data,
             #[cfg(zcash_unstable = "zfuture")]
             tze_bundle: self.tze_bundle.map(|b| b.map_authorization(f_tze)),
         }
@@ -768,6 +789,7 @@ impl Transaction {
         match data.version {
             TxVersion::Sprout(_) | TxVersion::V3 | TxVersion::V4 => Self::from_data_v4(data),
             TxVersion::V5 => Ok(Self::from_data_v5(data)),
+            TxVersion::VCrosslink => Ok(Self::from_data_vcrosslink(data)),
             #[cfg(zcash_unstable = "nu7")]
             TxVersion::V6 => Ok(Self::from_data_v6(data)),
             #[cfg(zcash_unstable = "zfuture")]
@@ -787,6 +809,16 @@ impl Transaction {
     }
 
     fn from_data_v5(data: TransactionData<Authorized>) -> Self {
+        let txid = to_txid(
+            data.version,
+            data.consensus_branch_id,
+            &data.digest(TxIdDigester),
+        );
+
+        Transaction { txid, data }
+    }
+
+    fn from_data_vcrosslink(data: TransactionData<Authorized>) -> Self {
         let txid = to_txid(
             data.version,
             data.consensus_branch_id,
@@ -824,6 +856,7 @@ impl Transaction {
                 Self::read_v4(reader, version, consensus_branch_id)
             }
             TxVersion::V5 => Self::read_v5(reader.into_base_reader(), version),
+            TxVersion::VCrosslink => Self::read_vcrosslink(reader.into_base_reader(), version),
             #[cfg(zcash_unstable = "nu7")]
             TxVersion::V6 => Self::read_v6(reader.into_base_reader(), version),
             #[cfg(zcash_unstable = "zfuture")]
@@ -907,6 +940,7 @@ impl Transaction {
                     )
                 }),
                 orchard_bundle: None,
+                crosslink_data: CommandBuf::empty(),
                 #[cfg(zcash_unstable = "zfuture")]
                 tze_bundle: None,
             },
@@ -982,11 +1016,51 @@ impl Transaction {
             sprout_bundle: None,
             sapling_bundle,
             orchard_bundle,
+            crosslink_data: CommandBuf::empty(),
             #[cfg(zcash_unstable = "zfuture")]
             tze_bundle: None,
         };
 
         Ok(Self::from_data_v5(data))
+    }
+
+    fn read_vcrosslink<R: Read>(mut reader: R, version: TxVersion) -> io::Result<Self> {
+        let (consensus_branch_id, lock_time, expiry_height) =
+            Self::read_header_fragment(&mut reader)?;
+
+        #[cfg(all(
+            any(zcash_unstable = "nu7", zcash_unstable = "zfuture"),
+            feature = "zip-233"
+        ))]
+        let zip233_amount = Zatoshis::ZERO;
+
+        let transparent_bundle = Self::read_transparent(&mut reader)?;
+        let sapling_bundle = sapling_serialization::read_v5_bundle(&mut reader)?;
+        let orchard_bundle = orchard_serialization::read_vcrosslink_bundle(&mut reader)?;
+
+        let mut crosslink_data = CommandBuf::empty();
+        reader.read_exact(&mut crosslink_data.data)?;
+
+        let data = TransactionData {
+            version,
+            consensus_branch_id,
+            lock_time,
+            expiry_height,
+            #[cfg(all(
+                any(zcash_unstable = "nu7", zcash_unstable = "zfuture"),
+                feature = "zip-233"
+            ))]
+            zip233_amount,
+            transparent_bundle,
+            sprout_bundle: None,
+            sapling_bundle,
+            orchard_bundle,
+            crosslink_data,
+            #[cfg(zcash_unstable = "zfuture")]
+            tze_bundle: None,
+        };
+
+        Ok(Self::from_data_vcrosslink(data))
     }
 
     #[cfg(any(zcash_unstable = "nu7", zcash_unstable = "zfuture"))]
@@ -1092,6 +1166,7 @@ impl Transaction {
         match self.version {
             TxVersion::Sprout(_) | TxVersion::V3 | TxVersion::V4 => self.write_v4(writer),
             TxVersion::V5 => self.write_v5(writer),
+            TxVersion::VCrosslink => self.write_vcrosslink(writer),
             #[cfg(zcash_unstable = "nu7")]
             TxVersion::V6 => self.write_v6(writer),
             #[cfg(zcash_unstable = "zfuture")]
@@ -1167,6 +1242,21 @@ impl Transaction {
         Ok(())
     }
 
+    pub fn write_vcrosslink<W: Write>(&self, mut writer: W) -> io::Result<()> {
+        if self.sprout_bundle.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Sprout components cannot be present when serializing to the V5 transaction format.",
+            ));
+        }
+        self.write_vcrosslink_header(&mut writer)?;
+        self.write_transparent(&mut writer)?;
+        self.write_v5_sapling(&mut writer)?;
+        orchard_serialization::write_vcrosslink_bundle(self.orchard_bundle.as_ref(), &mut writer)?;
+
+        Ok(())
+    }
+
     #[cfg(any(zcash_unstable = "nu7", zcash_unstable = "zfuture"))]
     pub fn write_v6<W: Write>(&self, mut writer: W) -> io::Result<()> {
         if self.sprout_bundle.is_some() {
@@ -1187,6 +1277,14 @@ impl Transaction {
     }
 
     pub fn write_v5_header<W: Write>(&self, mut writer: W) -> io::Result<()> {
+        self.version.write(&mut writer)?;
+        writer.write_u32_le(u32::from(self.consensus_branch_id))?;
+        writer.write_u32_le(self.lock_time)?;
+        writer.write_u32_le(u32::from(self.expiry_height))?;
+        Ok(())
+    }
+
+    pub fn write_vcrosslink_header<W: Write>(&self, mut writer: W) -> io::Result<()> {
         self.version.write(&mut writer)?;
         writer.write_u32_le(u32::from(self.consensus_branch_id))?;
         writer.write_u32_le(self.lock_time)?;
@@ -1257,6 +1355,7 @@ pub struct TxDigests<A> {
     pub transparent_digests: Option<TransparentDigests<A>>,
     pub sapling_digest: Option<A>,
     pub orchard_digest: Option<A>,
+    pub crosslink_digest: Option<A>,
     #[cfg(zcash_unstable = "zfuture")]
     pub tze_digests: Option<TzeDigests<A>>,
 }
@@ -1266,6 +1365,7 @@ pub trait TransactionDigest<A: Authorization> {
     type TransparentDigest;
     type SaplingDigest;
     type OrchardDigest;
+    type CrosslinkDigest;
 
     #[cfg(zcash_unstable = "zfuture")]
     type TzeDigest;
@@ -1300,6 +1400,11 @@ pub trait TransactionDigest<A: Authorization> {
         orchard_bundle: Option<&orchard::Bundle<A::OrchardAuth, ZatBalance>>,
     ) -> Self::OrchardDigest;
 
+    fn digest_crosslink(
+        &self,
+        cmd_buf: &CommandBuf
+    ) -> Self::CrosslinkDigest;
+
     #[cfg(zcash_unstable = "zfuture")]
     fn digest_tze(&self, tze_bundle: Option<&tze::Bundle<A::TzeAuth>>) -> Self::TzeDigest;
 
@@ -1309,6 +1414,7 @@ pub trait TransactionDigest<A: Authorization> {
         transparent_digest: Self::TransparentDigest,
         sapling_digest: Self::SaplingDigest,
         orchard_digest: Self::OrchardDigest,
+        crosslink_digest: Self::CrosslinkDigest,
         #[cfg(zcash_unstable = "zfuture")] tze_digest: Self::TzeDigest,
     ) -> Self::Digest;
 }
@@ -1316,6 +1422,47 @@ pub trait TransactionDigest<A: Authorization> {
 pub enum DigestError {
     NotSigned,
 }
+
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]//, Serialize, Deserialize)]
+/// A (temporary) small fixed-size buffer for communicating crosslink dev/test commands
+pub struct CommandBuf {
+    /// Data buffer to contain short command
+    pub data: [u8; 128],
+}
+impl CommandBuf {
+    /// size of the internal buffer
+    pub const SIZE: usize = 128;
+
+    /// Create an empty command buffer
+    pub fn empty() -> Self {
+        CommandBuf { data: [0; 128] }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.data[0] == 0
+    }
+
+    /// get a rust string from the fixed-size buffer
+    pub fn from_str(str: &str) -> Self {
+        let mut buf = Self::empty();
+        let n = std::cmp::min(str.len(), Self::SIZE);
+        buf.data[..n].copy_from_slice(&str.as_bytes()[..n]);
+        buf
+    }
+
+    /// get a rust string from the fixed-size buffer
+    pub fn to_str(&self) -> &str {
+        let mut c = 0;
+        while c < self.data.len() {
+            if self.data[c] == 0 {
+                break;
+            }
+            c += 1;
+        }
+        std::str::from_utf8(&self.data[..c]).expect("init with valid UTF-8")
+    }
+}
+
 
 #[cfg(any(test, feature = "test-dependencies"))]
 pub mod testing {
@@ -1384,6 +1531,7 @@ pub mod testing {
                 sprout_bundle: None,
                 sapling_bundle,
                 orchard_bundle,
+                crosslink_data: CommandBuf::empty(),
             }
         }
     }

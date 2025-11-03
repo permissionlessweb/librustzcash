@@ -43,6 +43,9 @@ pub const V6_TX_VERSION: u32 = 6;
 #[cfg(zcash_unstable = "nu7")]
 pub const V6_VERSION_GROUP_ID: u32 = 0xFFFFFFFF;
 
+pub const VCROSSLINK_TX_VERSION: u32 = 7;
+pub const VCROSSLINK_VERSION_GROUP_ID: u32 = 0xFFFF_FFFE;
+
 /// This version is used exclusively for in-development transaction
 /// serialization, and will never be active under the consensus rules.
 /// When new consensus transaction versions are added, all call sites

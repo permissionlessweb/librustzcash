@@ -16,6 +16,7 @@ use zcash_protocol::{
 
 use super::{
     Authorization, Authorized, TransactionDigest, TransparentDigests, TxDigests, TxId, TxVersion,
+    CommandBuf
 };
 
 #[cfg(all(
@@ -66,6 +67,8 @@ const ZCASH_TRANSPARENT_SCRIPTS_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxAuthTrans
 const ZCASH_SAPLING_SIGS_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxAuthSapliHash";
 #[cfg(zcash_unstable = "zfuture")]
 const ZCASH_TZE_WITNESSES_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxAuthTZE__Hash";
+
+const ZCASH_CROSSLINK_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxId_XLink_Hash";
 
 fn hasher(personal: &[u8; 16]) -> StateWrite {
     StateWrite(Params::new().hash_length(32).personal(personal).to_state())
@@ -289,6 +292,10 @@ fn hash_sapling_txid_empty() -> Blake2bHash {
     hasher(ZCASH_SAPLING_HASH_PERSONALIZATION).finalize()
 }
 
+fn hash_crosslink_txid_empty() -> Blake2bHash {
+    hasher(ZCASH_CROSSLINK_HASH_PERSONALIZATION).finalize()
+}
+
 #[cfg(zcash_unstable = "zfuture")]
 fn hash_tze_txid_data(tze_digests: Option<&TzeDigests<Blake2bHash>>) -> Blake2bHash {
     let mut h = hasher(ZCASH_TZE_HASH_PERSONALIZATION);
@@ -316,6 +323,7 @@ impl<A: Authorization> TransactionDigest<A> for TxIdDigester {
     type TransparentDigest = Option<TransparentDigests<Blake2bHash>>;
     type SaplingDigest = Option<Blake2bHash>;
     type OrchardDigest = Option<Blake2bHash>;
+    type CrosslinkDigest = Option<Blake2bHash>;
 
     #[cfg(zcash_unstable = "zfuture")]
     type TzeDigest = Option<TzeDigests<Blake2bHash>>;
@@ -368,6 +376,16 @@ impl<A: Authorization> TransactionDigest<A> for TxIdDigester {
         orchard_bundle.map(|b| b.commitment().0)
     }
 
+    fn digest_crosslink(&self, cmd_buf: &CommandBuf) -> Self::CrosslinkDigest {
+        if cmd_buf.is_empty() {
+            None
+        } else {
+            let mut h = hasher(ZCASH_CROSSLINK_HASH_PERSONALIZATION);
+            h.write_all(&cmd_buf.data).unwrap();
+            Some(h.finalize())
+        }
+    }
+
     #[cfg(zcash_unstable = "zfuture")]
     fn digest_tze(&self, tze_bundle: Option<&tze::Bundle<A::TzeAuth>>) -> Self::TzeDigest {
         tze_bundle.map(tze_digests)
@@ -379,6 +397,7 @@ impl<A: Authorization> TransactionDigest<A> for TxIdDigester {
         transparent_digests: Self::TransparentDigest,
         sapling_digest: Self::SaplingDigest,
         orchard_digest: Self::OrchardDigest,
+        crosslink_digest: Self::CrosslinkDigest,
         #[cfg(zcash_unstable = "zfuture")] tze_digests: Self::TzeDigest,
     ) -> Self::Digest {
         TxDigests {
@@ -386,6 +405,7 @@ impl<A: Authorization> TransactionDigest<A> for TxIdDigester {
             transparent_digests,
             sapling_digest,
             orchard_digest,
+            crosslink_digest,
             #[cfg(zcash_unstable = "zfuture")]
             tze_digests,
         }
@@ -399,6 +419,7 @@ pub(crate) fn to_hash(
     transparent_digest: Blake2bHash,
     sapling_digest: Option<Blake2bHash>,
     orchard_digest: Option<Blake2bHash>,
+    crosslink_digest: Option<Blake2bHash>,
     #[cfg(zcash_unstable = "zfuture")] tze_digests: Option<&TzeDigests<Blake2bHash>>,
 ) -> Blake2bHash {
     let mut personal = [0; 16];
@@ -423,6 +444,17 @@ pub(crate) fn to_hash(
     )
     .unwrap();
 
+    // TODO: no-op or mirror existing?
+    if let Some(crosslink_digest) = crosslink_digest {
+        h.write_all(crosslink_digest.as_bytes()).unwrap();
+    }
+    // h.write_all(
+    //     crosslink_digest
+    //         .unwrap_or_else(hash_crosslink_txid_empty)
+    //         .as_bytes(),
+    // )
+    // .unwrap();
+
     #[cfg(zcash_unstable = "zfuture")]
     if _txversion.has_tze() {
         h.write_all(hash_tze_txid_data(tze_digests).as_bytes())
@@ -444,6 +476,7 @@ pub fn to_txid(
         hash_transparent_txid_data(digests.transparent_digests.as_ref()),
         digests.sapling_digest,
         digests.orchard_digest,
+        digests.crosslink_digest,
         #[cfg(zcash_unstable = "zfuture")]
         digests.tze_digests.as_ref(),
     );
@@ -464,6 +497,7 @@ impl TransactionDigest<Authorized> for BlockTxCommitmentDigester {
     type TransparentDigest = Blake2bHash;
     type SaplingDigest = Blake2bHash;
     type OrchardDigest = Blake2bHash;
+    type CrosslinkDigest = Blake2bHash;
 
     #[cfg(zcash_unstable = "zfuture")]
     type TzeDigest = Blake2bHash;
@@ -532,6 +566,15 @@ impl TransactionDigest<Authorized> for BlockTxCommitmentDigester {
         })
     }
 
+    fn digest_crosslink(&self, cmd_buf: &CommandBuf) -> Self::CrosslinkDigest {
+        let mut h = hasher(ZCASH_CROSSLINK_HASH_PERSONALIZATION);
+        if !cmd_buf.is_empty() {
+            h.write_all(&cmd_buf.data).unwrap();
+        }
+        h.finalize()
+    }
+
+
     #[cfg(zcash_unstable = "zfuture")]
     fn digest_tze(&self, tze_bundle: Option<&tze::Bundle<tze::Authorized>>) -> Blake2bHash {
         let mut h = hasher(ZCASH_TZE_WITNESSES_HASH_PERSONALIZATION);
@@ -549,9 +592,10 @@ impl TransactionDigest<Authorized> for BlockTxCommitmentDigester {
         transparent_digest: Self::TransparentDigest,
         sapling_digest: Self::SaplingDigest,
         orchard_digest: Self::OrchardDigest,
+        crosslink_digest: Self::CrosslinkDigest,
         #[cfg(zcash_unstable = "zfuture")] tze_digest: Self::TzeDigest,
     ) -> Self::Digest {
-        let digests = [transparent_digest, sapling_digest, orchard_digest];
+        let digests = [transparent_digest, sapling_digest, orchard_digest, crosslink_digest];
 
         let mut personal = [0; 16];
         personal[..12].copy_from_slice(ZCASH_AUTH_PERSONALIZATION_PREFIX);

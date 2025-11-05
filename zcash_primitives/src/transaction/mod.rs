@@ -1519,6 +1519,21 @@ impl StakingAction {
         writer.write_all(&self.source).ok()
     }
 
+    pub fn to_cmd_string(&self) -> std::string::String {
+        let kind_str = match self.kind {
+            StakingActionKind::Add       => &"ADD",
+            StakingActionKind::Sub       => &"SUB",
+            StakingActionKind::Clear     => &"CLR",
+            StakingActionKind::Move      => &"MOV",
+            StakingActionKind::MoveClear => &"MCL",
+        };
+        let mut str = format!("{kind_str}|{}|{}", self.val, self.insecure_target_name);
+        if self.kind == StakingActionKind::Move || self.kind == StakingActionKind::MoveClear {
+            str.push_str(&format!("|{}", self.insecure_source_name));
+        }
+        str
+    }
+
     pub fn parse_from_cmd(cmd_str: &str) -> Result<Option<StakingAction>, std::string::String> {
         // @Dup
         fn rng_private_public_key_from_address(

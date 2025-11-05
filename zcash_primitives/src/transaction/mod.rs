@@ -1463,6 +1463,136 @@ impl CommandBuf {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub enum StakingActionKind {
+    Add,
+    Sub,
+
+    /// "clear" to a given amount <= current voting power, probably 0
+    /// This exists alongside SUB because it's awkward to predict in advance the exact
+    /// voting power after block rewards have been accounted for.
+    Clear,
+    Move([u8; 32]),
+    MoveClear([u8; 32]),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub struct StakingAction {
+    pub kind: StakingActionKind,
+    pub val: u64,
+    pub target: [u8; 32],
+    // temporary
+    pub insecure_target_name: std::string::String,
+    pub insecure_source_name: std::string::String,
+}
+impl StakingAction {
+    pub fn parse_from_cmd(cmd_str: &str) -> Result<Option<StakingAction>, std::string::String> {
+        // @Dup
+        fn rng_private_public_key_from_address(
+            addr: &[u8],
+        ) -> (rand::rngs::StdRng, ed25519_zebra::SigningKey, ed25519_zebra::VerificationKey) {
+            use std::hash::{DefaultHasher, Hasher};
+            use rand::SeedableRng;
+            let mut hasher = DefaultHasher::new();
+            hasher.write(addr);
+            let seed = hasher.finish();
+            let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+            let private_key = ed25519_zebra::SigningKey::new(&mut rng);
+            let public_key = (&private_key).into();
+            (rng, private_key, public_key)
+        }
+
+        let cmd = cmd_str.as_bytes();
+
+        if cmd.len() == 0 {
+            // valid no-op
+            Ok(None)
+        } else if !(cmd.len() >= 4 && cmd[3] == b'|') {
+            Err(format!(
+                    "Roster command invalid: expected initial instruction\nCMD: \"{}\"",
+                    cmd_str
+            ))
+        } else {
+            let mut val_end = 4;
+            while val_end < cmd.len() && cmd[val_end] != b'|' {
+                val_end += 1;
+            }
+
+            let val_str = &cmd_str[4..val_end];
+            let maybe_val = str::parse::<u64>(val_str.trim());
+            // TODO (if this were anything close to production code): move these to before accepting them
+            if val_end + 1 >= cmd.len() {
+                Err(format!(
+                        "Roster command invalid: expected public address\nCMD: \"{}\"",
+                        cmd_str
+                ))
+            } else if let Err(err) = maybe_val {
+                Err(format!(
+                        "Roster command invalid: expected u64, received \"{}\" ({})\nCMD: \"{}\"",
+                        val_str, err, cmd_str
+                ))
+            } else {
+                let val = maybe_val.expect("already checked above");
+
+                let addr0_bgn = val_end + 1;
+
+                let mut addr0_end = addr0_bgn;
+                while addr0_end < cmd.len() && cmd[addr0_end] != b'|' {
+                    addr0_end += 1;
+                }
+
+                let (_, _, pub_key) =
+                    rng_private_public_key_from_address(&cmd[addr0_bgn..addr0_end]);
+
+                let (addr1_bgn, public_key1) = if addr0_end + 1 < cmd.len() {
+                    let addr1_bgn = addr0_end + 1;
+                    let (_, _, public_key1) = rng_private_public_key_from_address(&cmd[addr1_bgn..]);
+                    (Some(addr1_bgn), Some(public_key1))
+                } else {
+                    (None, None)
+                };
+
+                let insecure_target_name = std::string::String::from(&cmd_str[addr0_bgn..addr0_end]);
+                let mut insecure_source_name = std::string::String::new();
+
+                let kind = match cmd[..3] {
+                    [b'A', b'D', b'D'] => StakingActionKind::Add,
+                    [b'S', b'U', b'B'] => StakingActionKind::Sub,
+                    [b'C', b'L', b'R'] => StakingActionKind::Clear,
+
+                    [b'M', b'O', b'V'] => {
+                        insecure_source_name = std::string::String::from(&cmd_str[addr1_bgn.unwrap_or(cmd_str.len())..]);
+                        let Some(pk) = public_key1 else {
+                            return Err(format!("Roster command invalid: can't move from non-present finalizer \"{}\"\nCMD: \"{}\"", insecure_source_name, cmd_str));
+                        };
+                        StakingActionKind::Move(pk.into())
+                    }
+
+                    [b'M', b'C', b'L'] => {
+                        insecure_source_name = std::string::String::from(&cmd_str[addr1_bgn.unwrap_or(cmd_str.len())..]);
+                        let Some(pk) = public_key1 else {
+                            return Err(format!("Roster command invalid: can't clear from non-present finalizer \"{}\"\nCMD: \"{}\"", insecure_source_name, cmd_str));
+                        };
+                        StakingActionKind::MoveClear(pk.into())
+                    }
+
+                    _ => return Err(format!(
+                            "Roster command invalid: unrecognized instruction:\nCMD: \"{}\"",
+                            cmd_str
+                    )),
+                };
+
+                Ok(Some(StakingAction{
+                    kind,
+                    val,
+                    target: pub_key.into(),
+                    insecure_target_name,
+                    insecure_source_name,
+                }))
+            }
+        }
+    }
+}
 
 #[cfg(any(test, feature = "test-dependencies"))]
 pub mod testing {

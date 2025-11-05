@@ -389,7 +389,7 @@ pub struct TransactionData<A: Authorization> {
     sprout_bundle: Option<sprout::Bundle>,
     sapling_bundle: Option<sapling::Bundle<A::SaplingAuth, ZatBalance>>,
     orchard_bundle: Option<orchard::bundle::Bundle<A::OrchardAuth, ZatBalance>>,
-    crosslink_data: CommandBuf,
+    staking_action: Option<StakingAction>,
     #[cfg(zcash_unstable = "zfuture")]
     tze_bundle: Option<tze::Bundle<A::TzeAuth>>,
 }
@@ -445,7 +445,7 @@ impl<A: Authorization> TransactionData<A> {
         sprout_bundle: Option<sprout::Bundle>,
         sapling_bundle: Option<sapling::Bundle<A::SaplingAuth, ZatBalance>>,
         orchard_bundle: Option<orchard::Bundle<A::OrchardAuth, ZatBalance>>,
-        crosslink_data: CommandBuf,
+        staking_action: Option<StakingAction>,
     ) -> Self {
         TransactionData {
             version,
@@ -461,7 +461,7 @@ impl<A: Authorization> TransactionData<A> {
             sprout_bundle,
             sapling_bundle,
             orchard_bundle,
-            crosslink_data,
+            staking_action,
             #[cfg(zcash_unstable = "zfuture")]
             tze_bundle: None,
         }
@@ -532,8 +532,8 @@ impl<A: Authorization> TransactionData<A> {
         self.orchard_bundle.as_ref()
     }
 
-    pub fn crosslink_data(&self) -> CommandBuf {
-        self.crosslink_data.clone()
+    pub fn staking_action(&self) -> Option<StakingAction> {
+        self.staking_action.clone()
     }
 
     #[cfg(all(
@@ -610,7 +610,7 @@ impl<A: Authorization> TransactionData<A> {
             digester.digest_transparent(self.transparent_bundle.as_ref()),
             digester.digest_sapling(self.sapling_bundle.as_ref()),
             digester.digest_orchard(self.orchard_bundle.as_ref()),
-            digester.digest_crosslink(&self.crosslink_data),
+            digester.digest_crosslink(&self.staking_action),
             #[cfg(zcash_unstable = "zfuture")]
             digester.digest_tze(self.tze_bundle.as_ref()),
         )
@@ -666,7 +666,7 @@ impl<A: Authorization> TransactionData<A> {
             sprout_bundle: self.sprout_bundle,
             sapling_bundle: f_sapling(self.sapling_bundle),
             orchard_bundle: f_orchard(self.orchard_bundle),
-            crosslink_data: self.crosslink_data,
+            staking_action: self.staking_action,
             #[cfg(zcash_unstable = "zfuture")]
             tze_bundle: f_tze(self.tze_bundle),
         }
@@ -711,7 +711,7 @@ impl<A: Authorization> TransactionData<A> {
             sprout_bundle: self.sprout_bundle,
             sapling_bundle: f_sapling(self.sapling_bundle)?,
             orchard_bundle: f_orchard(self.orchard_bundle)?,
-            crosslink_data: self.crosslink_data,
+            staking_action: self.staking_action,
             #[cfg(zcash_unstable = "zfuture")]
             tze_bundle: f_tze(self.tze_bundle)?,
         })
@@ -754,7 +754,7 @@ impl<A: Authorization> TransactionData<A> {
                     |f, a| f.map_authorization(a),
                 )
             }),
-            crosslink_data: self.crosslink_data,
+            staking_action: self.staking_action,
             #[cfg(zcash_unstable = "zfuture")]
             tze_bundle: self.tze_bundle.map(|b| b.map_authorization(f_tze)),
         }
@@ -940,7 +940,7 @@ impl Transaction {
                     )
                 }),
                 orchard_bundle: None,
-                crosslink_data: CommandBuf::empty(),
+                staking_action: None,
                 #[cfg(zcash_unstable = "zfuture")]
                 tze_bundle: None,
             },
@@ -1016,7 +1016,7 @@ impl Transaction {
             sprout_bundle: None,
             sapling_bundle,
             orchard_bundle,
-            crosslink_data: CommandBuf::empty(),
+            staking_action: None,
             #[cfg(zcash_unstable = "zfuture")]
             tze_bundle: None,
         };
@@ -1037,9 +1037,7 @@ impl Transaction {
         let transparent_bundle = Self::read_transparent(&mut reader)?;
         let sapling_bundle = sapling_serialization::read_v5_bundle(&mut reader)?;
         let orchard_bundle = orchard_serialization::read_vcrosslink_bundle(&mut reader)?;
-
-        let mut crosslink_data = CommandBuf::empty();
-        reader.read_exact(&mut crosslink_data.data)?;
+        let staking_action = StakingAction::read(&mut reader)?;
 
         let data = TransactionData {
             version,
@@ -1055,7 +1053,7 @@ impl Transaction {
             sprout_bundle: None,
             sapling_bundle,
             orchard_bundle,
-            crosslink_data,
+            staking_action,
             #[cfg(zcash_unstable = "zfuture")]
             tze_bundle: None,
         };
@@ -1253,6 +1251,7 @@ impl Transaction {
         self.write_transparent(&mut writer)?;
         self.write_v5_sapling(&mut writer)?;
         orchard_serialization::write_vcrosslink_bundle(self.orchard_bundle.as_ref(), &mut writer)?;
+        StakingAction::write(&self.staking_action, &mut writer)?;
 
         Ok(())
     }
@@ -1402,7 +1401,7 @@ pub trait TransactionDigest<A: Authorization> {
 
     fn digest_crosslink(
         &self,
-        cmd_buf: &CommandBuf
+        staking_action: &Option<StakingAction>
     ) -> Self::CrosslinkDigest;
 
     #[cfg(zcash_unstable = "zfuture")]
@@ -1463,7 +1462,7 @@ impl CommandBuf {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub enum StakingActionKind {
     Add,
     Sub,
@@ -1472,20 +1471,54 @@ pub enum StakingActionKind {
     /// This exists alongside SUB because it's awkward to predict in advance the exact
     /// voting power after block rewards have been accounted for.
     Clear,
-    Move([u8; 32]),
-    MoveClear([u8; 32]),
+    Move,
+    MoveClear,
+}
+impl From<StakingActionKind> for u8 {
+    fn from(v: StakingActionKind) -> u8 {
+        match v {
+            // 0 is reserved for None
+            StakingActionKind::Add       => 1,
+            StakingActionKind::Sub       => 2,
+            StakingActionKind::Clear     => 3,
+            StakingActionKind::Move      => 4,
+            StakingActionKind::MoveClear => 5,
+        }
+    }
+}
+impl TryFrom<u8> for StakingActionKind {
+    type Error = ();
+    fn try_from(v: u8) -> Result<StakingActionKind, ()> {
+        match v {
+            1 => Ok(StakingActionKind::Add),
+            2 => Ok(StakingActionKind::Sub),
+            3 => Ok(StakingActionKind::Clear),
+            4 => Ok(StakingActionKind::Move),
+            5 => Ok(StakingActionKind::MoveClear),
+            _ => Err(()),
+        }
+    }
 }
 
+// TODO(code org): should this be under zcash_protocol?
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub struct StakingAction {
     pub kind: StakingActionKind,
     pub val: u64,
     pub target: [u8; 32],
+    pub source: [u8; 32],
     // temporary
     pub insecure_target_name: std::string::String,
     pub insecure_source_name: std::string::String,
 }
 impl StakingAction {
+    fn hash_to_state(&self, writer: &mut crate::encoding::StateWrite) -> Option<()> {
+        writer.write_all(&[u8::from(self.kind)]).ok()?;
+        writer.write_all(&self.val.to_le_bytes()).ok()?;
+        writer.write_all(&self.target).ok()?;
+        writer.write_all(&self.source).ok()
+    }
+
     pub fn parse_from_cmd(cmd_str: &str) -> Result<Option<StakingAction>, std::string::String> {
         // @Dup
         fn rng_private_public_key_from_address(
@@ -1554,6 +1587,7 @@ impl StakingAction {
 
                 let insecure_target_name = std::string::String::from(&cmd_str[addr0_bgn..addr0_end]);
                 let mut insecure_source_name = std::string::String::new();
+                let mut source = [0u8; 32];
 
                 let kind = match cmd[..3] {
                     [b'A', b'D', b'D'] => StakingActionKind::Add,
@@ -1561,19 +1595,21 @@ impl StakingAction {
                     [b'C', b'L', b'R'] => StakingActionKind::Clear,
 
                     [b'M', b'O', b'V'] => {
-                        insecure_source_name = std::string::String::from(&cmd_str[addr1_bgn.unwrap_or(cmd_str.len())..]);
                         let Some(pk) = public_key1 else {
                             return Err(format!("Roster command invalid: can't move from non-present finalizer \"{}\"\nCMD: \"{}\"", insecure_source_name, cmd_str));
                         };
-                        StakingActionKind::Move(pk.into())
+                        source = pk.into();
+                        insecure_source_name = std::string::String::from(&cmd_str[addr1_bgn.unwrap_or(cmd_str.len())..]);
+                        StakingActionKind::Move
                     }
 
                     [b'M', b'C', b'L'] => {
-                        insecure_source_name = std::string::String::from(&cmd_str[addr1_bgn.unwrap_or(cmd_str.len())..]);
                         let Some(pk) = public_key1 else {
                             return Err(format!("Roster command invalid: can't clear from non-present finalizer \"{}\"\nCMD: \"{}\"", insecure_source_name, cmd_str));
                         };
-                        StakingActionKind::MoveClear(pk.into())
+                        source = pk.into();
+                        insecure_source_name = std::string::String::from(&cmd_str[addr1_bgn.unwrap_or(cmd_str.len())..]);
+                        StakingActionKind::MoveClear
                     }
 
                     _ => return Err(format!(
@@ -1586,11 +1622,104 @@ impl StakingAction {
                     kind,
                     val,
                     target: pub_key.into(),
+                    source,
                     insecure_target_name,
                     insecure_source_name,
                 }))
             }
         }
+    }
+
+    pub fn read<R: Read>(
+        mut reader: R,
+    ) -> io::Result<Option<StakingAction>> {
+        let tag = reader.read_u8()?;
+        if tag == 0 {
+            return Ok(None);
+        }
+
+        let Ok(kind) = StakingActionKind::try_from(tag) else {
+            return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("unexpected staking action tag: {tag}"),
+            ));
+        };
+
+        let mut buf = [0u8; 8];
+        reader.read_exact(&mut buf)?;
+        let val = u64::from_le_bytes(buf);
+
+        // TODO: check against 0 in a way that doesn't break the rest of the block?
+        let mut target = [0u8; 32];
+        reader.read_exact(&mut target)?;
+
+        let mut source = [0u8; 32];
+        reader.read_exact(&mut source)?;
+
+        // TODO(@Prod): remove all of the following once we no longer have insecure user names
+        use std::string::ToString;
+
+        let target_name_len = reader.read_u8()? as usize;
+        let mut target_name_buf = vec![0u8; target_name_len];
+        reader.read_exact(&mut target_name_buf)?;
+        let insecure_target_name = std::string::String::from_utf8_lossy(&target_name_buf).to_string();
+
+        let source_name_len = reader.read_u8()? as usize;
+        let mut source_name_buf = vec![0u8; source_name_len];
+        reader.read_exact(&mut source_name_buf)?;
+        let insecure_source_name = std::string::String::from_utf8_lossy(&source_name_buf).to_string();
+
+        Ok(Some(StakingAction {
+            kind, val, source, target, insecure_target_name, insecure_source_name
+        }))
+    }
+
+    pub fn write<W: Write>(
+        staking_action: &Option<StakingAction>,
+        mut writer: W,
+    ) -> io::Result<()> {
+        if let Some(staking_action) = staking_action {
+            writer.write_u8(u8::from(staking_action.kind))?;
+            writer.write_u64_le(staking_action.val)?;
+            writer.write_all(&staking_action.target)?;
+            writer.write_all(&staking_action.source)?;
+
+            // TODO(@Prod): remove all of the following once we no longer have insecure user names
+            let target_len = usize::min(u8::MAX as usize, staking_action.insecure_target_name.len());
+            writer.write_u8(target_len as u8)?;
+            writer.write_all(&staking_action.insecure_target_name.as_bytes()[..target_len])?;
+
+            let source_len = usize::min(u8::MAX as usize, staking_action.insecure_source_name.len());
+            writer.write_u8(source_len as u8)?;
+            writer.write_all(&staking_action.insecure_source_name.as_bytes()[..source_len])
+        } else {
+            writer.write_u8(0)
+        }
+    }
+}
+impl std::fmt::Display for StakingAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut fmter = f.debug_struct("StakingAction");
+
+        fmter.field("kind", match self.kind {
+            StakingActionKind::Add       => &"Add",
+            StakingActionKind::Sub       => &"Sub",
+            StakingActionKind::Clear     => &"Clear",
+            StakingActionKind::Move      => &"Move",
+            StakingActionKind::MoveClear => &"MoveClear",
+        });
+
+        fmter.field("val", &self.val);
+
+        fmter.field("target", &self.target);
+        fmter.field("insecure_target_name", &self.insecure_target_name);
+
+        if self.kind == StakingActionKind::Move || self.kind == StakingActionKind::MoveClear {
+            fmter.field("source", &self.source);
+            fmter.field("insecure_source_name", &self.insecure_source_name);
+        }
+
+        fmter.finish()
     }
 }
 
@@ -1661,7 +1790,7 @@ pub mod testing {
                 sprout_bundle: None,
                 sapling_bundle,
                 orchard_bundle,
-                crosslink_data: CommandBuf::empty(),
+                staking_action: None,
             }
         }
     }

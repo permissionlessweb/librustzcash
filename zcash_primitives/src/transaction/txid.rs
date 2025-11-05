@@ -16,7 +16,7 @@ use zcash_protocol::{
 
 use super::{
     Authorization, Authorized, TransactionDigest, TransparentDigests, TxDigests, TxId, TxVersion,
-    CommandBuf
+    StakingAction
 };
 
 #[cfg(all(
@@ -68,7 +68,7 @@ const ZCASH_SAPLING_SIGS_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxAuthSapliHash";
 #[cfg(zcash_unstable = "zfuture")]
 const ZCASH_TZE_WITNESSES_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxAuthTZE__Hash";
 
-const ZCASH_CROSSLINK_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxId_XLink_Hash";
+const ZCASH_CROSSLINK_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxCrosslinkHash"; // ALT: "Stake"
 
 fn hasher(personal: &[u8; 16]) -> StateWrite {
     StateWrite(Params::new().hash_length(32).personal(personal).to_state())
@@ -376,13 +376,13 @@ impl<A: Authorization> TransactionDigest<A> for TxIdDigester {
         orchard_bundle.map(|b| b.commitment().0)
     }
 
-    fn digest_crosslink(&self, cmd_buf: &CommandBuf) -> Self::CrosslinkDigest {
-        if cmd_buf.is_empty() {
-            None
-        } else {
+    fn digest_crosslink(&self, staking_action: &Option<StakingAction>) -> Self::CrosslinkDigest {
+        if let Some(staking_action) = staking_action {
             let mut h = hasher(ZCASH_CROSSLINK_HASH_PERSONALIZATION);
-            h.write_all(&cmd_buf.data).unwrap();
+            staking_action.hash_to_state(&mut h);
             Some(h.finalize())
+        } else {
+            None
         }
     }
 
@@ -566,10 +566,10 @@ impl TransactionDigest<Authorized> for BlockTxCommitmentDigester {
         })
     }
 
-    fn digest_crosslink(&self, cmd_buf: &CommandBuf) -> Self::CrosslinkDigest {
+    fn digest_crosslink(&self, staking_action: &Option<StakingAction>) -> Self::CrosslinkDigest {
         let mut h = hasher(ZCASH_CROSSLINK_HASH_PERSONALIZATION);
-        if !cmd_buf.is_empty() {
-            h.write_all(&cmd_buf.data).unwrap();
+        if let Some(staking_action) = staking_action {
+            staking_action.hash_to_state(&mut h);
         }
         h.finalize()
     }

@@ -405,6 +405,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         ));
 
         // Check that we can apply this migration.

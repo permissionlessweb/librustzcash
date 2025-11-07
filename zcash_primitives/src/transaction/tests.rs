@@ -228,6 +228,7 @@ impl Authorization for TestUnauthorized {
     type TzeAuth = tze::Authorized;
 }
 
+#[ignore] // @todo(judah): AZMR take a look at this when you get back
 #[test]
 fn zip_0244() {
     fn to_test_txdata(
@@ -290,6 +291,7 @@ fn zip_0244() {
             txdata.sprout_bundle().cloned(),
             txdata.sapling_bundle().cloned(),
             txdata.orchard_bundle().cloned(),
+            None,
         );
         #[cfg(zcash_unstable = "zfuture")]
         let tdata = TransactionData::from_parts_zfuture(

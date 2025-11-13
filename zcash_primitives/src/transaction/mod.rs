@@ -58,6 +58,7 @@ use {
 };
 
 pub use zcash_protocol::TxId;
+use serde::Serialize;
 
 /// The set of defined transaction format versions.
 ///
@@ -1462,7 +1463,7 @@ impl CommandBuf {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize)]
 pub enum StakingActionKind {
     Add,
     Sub,
@@ -1501,7 +1502,7 @@ impl TryFrom<u8> for StakingActionKind {
 }
 
 // TODO(code org): should this be under zcash_protocol?
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize)]
 pub struct StakingAction {
     pub kind: StakingActionKind,
     pub val: u64,

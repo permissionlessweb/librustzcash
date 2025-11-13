@@ -75,6 +75,8 @@ redjubjub.workspace = true
 # No-std support
 corez.workspace = true
 
+serde.workspace = true
+
 [dependencies.zcash_note_encryption]
 workspace = true
 features = ["pre-zip-212"]

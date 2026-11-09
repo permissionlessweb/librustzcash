@@ -93,7 +93,7 @@ pub fn read_v5_bundle<R: Read>(
 pub fn read_vcrosslink_bundle<R: Read>(
     reader: R,
 ) -> io::Result<Option<orchard::Bundle<Authorized, ZatBalance>>> {
-    read_v5_bundle(reader)
+    read_v5_bundle(reader, ProofSizeEnforcement::Strict)
 }
 
 #[cfg(any(zcash_unstable = "zfuture", zcash_unstable = "nu7"))]

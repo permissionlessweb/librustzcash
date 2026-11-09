@@ -264,6 +264,14 @@ impl TxVersion {
         match self {
             TxVersion::Sprout(_) => consensus_branch_id == Sprout,
             TxVersion::V3 => consensus_branch_id == Overwinter,
+            TxVersion::VCrosslink => match consensus_branch_id {
+                Sprout | Overwinter | Sapling | Blossom | Heartwood | Canopy => false,
+                Nu5 | Nu6 | Nu6_1 | Nu6_2 => true,
+                #[cfg(zcash_unstable = "nu7")]
+                Nu7 => false,
+                #[cfg(zcash_unstable = "zfuture")]
+                ZFuture => false,
+            },
             TxVersion::V4 => match consensus_branch_id {
                 Sprout | Overwinter => false,
                 Sapling | Blossom | Heartwood | Canopy | Nu5 | Nu6 | Nu6_1 | Nu6_2 => true,
@@ -411,6 +419,7 @@ impl Clone for TransactionData<Authorized> {
             sprout_bundle: self.sprout_bundle.clone(),
             sapling_bundle: self.sapling_bundle.clone(),
             orchard_bundle: self.orchard_bundle.clone(),
+            staking_action: self.staking_action.clone(),
             #[cfg(zcash_unstable = "zfuture")]
             tze_bundle: self.tze_bundle.clone(),
         }
